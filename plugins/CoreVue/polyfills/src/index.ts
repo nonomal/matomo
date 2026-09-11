@@ -43,5 +43,13 @@ DOMPurify.addHook('afterSanitizeAttributes', (node: Element) => {
 });
 
 window.vueSanitize = function vueSanitize(val: unknown): string {
-  return DOMPurify.sanitize(val, { ADD_ATTR: ['target'] });
+  // Sanitised snippets never need a stylesheet, so drop any <style> element.
+  return DOMPurify.sanitize(val, { ADD_ATTR: ['target'], FORBID_TAGS: ['style'] });
+};
+
+// Returns the given URL if DOMPurify considers it a valid `href` value (i.e. it uses an allowed
+// scheme such as http(s)/mailto/tel and contains no dangerous payload), otherwise an empty string.
+// Use it to guard dynamic `:href`/`:src` bindings, e.g. `:href="$sanitizeUrl(url)"`.
+window.vueSanitizeUrl = function vueSanitizeUrl(url: string): string {
+  return DOMPurify.isValidAttribute('a', 'href', url) ? url : '';
 };

@@ -1,4 +1,5 @@
 @_layout-pageWrap-margin: 18px;
+@top-menu-nav-color: @theme-color-focus-ring-alternative;
 
 .card-content > .row:last-child {
   margin-bottom: 0;
@@ -19,6 +20,10 @@ ul.browser-default {
   a:focus-visible,
   button:focus-visible {
     outline-color: @theme-color-focus-ring-alternative;
+  }
+
+  .nav-wrapper {
+    border-bottom: 1px solid @theme-color-border-alternative;
   }
 
   .brand-logo {
@@ -68,16 +73,23 @@ ul.browser-default {
   ul.right.hide-on-med-and-down {
     margin-right: 4px;
 
+    .navbar-icon,
+    .navbar-label {
+      padding: 8px;
+      position: relative;
+      z-index: 1;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      vertical-align: middle;
+      line-height: 1;
+    }
+
     > li[role="menuitem"].active {
       background: transparent;
 
       > a {
         background: transparent;
-      }
-
-      .navbar-icon,
-      .navbar-label {
-        background-color: @theme-color-background-tinyContrast;
       }
     }
 
@@ -85,36 +97,37 @@ ul.browser-default {
       background: transparent;
 
       &:hover,
-      &:focus {
+      &:focus,
+      &:focus-visible {
         background: transparent;
+        outline: none;
       }
 
-      .navbar-icon {
-        padding: 8px;
-      }
-      .navbar-label {
-        padding: 4px;
-      }
-      .navbar-label, .navbar-icon {
-        border-radius: 8px;
+      &:hover .navbar-icon {
+        &::after {
+          // contrast + opacity to create an effect that work in light and dark mode, with our without white-label customization
+          background: light-dark(black, white);
+        }
       }
 
-      &:hover .navbar-icon,
       &:hover .navbar-label,
-      &:focus .navbar-icon,
-      &:focus .navbar-label {
-        background-color: @theme-color-background-tinyContrast;
+      &:focus-visible .navbar-label {
+        color: @top-menu-nav-color;
       }
-    }
-  }
 
-  .languageSelection {
-    &:hover {
-      background-color: @theme-color-background-tinyContrast;
+      &:focus-visible .navbar-icon,
+      &:focus-visible .navbar-label {
+        outline: 2px solid @theme-color-focus-ring-alternative;
+        outline-offset: -2px;
+      }
     }
   }
 
   ul:not(#mobile-top-menu) {
+    a {
+      color: @theme-color-header-text;
+    }
+
     .languageSelection {
       .title {
         color: @theme-color-header-text;
@@ -124,10 +137,9 @@ ul.browser-default {
   }
 
   ul a {
-    color: @theme-color-header-text;
     text-decoration: none;
     font-size: 14px;
-    padding: 0 8px;
+    padding: 0;
 
     &:hover {
       text-decoration: none;
@@ -135,6 +147,16 @@ ul.browser-default {
   }
   .navbar-icon {
     font-size: 16px;
+    /* Hover & active background */
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: 8px;
+      background: transparent;
+      opacity: 0.051;
+    }
   }
 }
 
@@ -348,14 +370,14 @@ ul.browser-default {
         }
 
         .item-help-icon {
-          display:none;
+          display: none;
           opacity: 0.2;
           position: absolute;
           right: 0;
           top: 0;
           padding: 10px;
           line-height: 13px;
-          height: calc(100%);
+          height: 100%;
           align-items: center;
           justify-content: center;
 
@@ -367,11 +389,11 @@ ul.browser-default {
 
         &.menuTab li:hover {
           .item-help-icon:not(.active) {
-            display:inline-flex;
-            color: @color-black-matomo;
+            display: inline-flex;
+            color: @theme-color-text;
 
             &:hover {
-              color: @theme-color-help-background-color;
+              color: @theme-color-link;
               opacity: 0.75;
             }
           }
@@ -379,7 +401,7 @@ ul.browser-default {
 
         .item-help-icon.active {
           display: inline-flex;
-          color: @theme-color-help-background-color;
+          color: @theme-color-link;
           opacity: 0.75;
         }
 
@@ -538,18 +560,29 @@ ul.browser-default {
 .badge-menu-item-container {
   line-height: inherit;
   position: relative;
+
+  .sidenav & {
+    padding: 0 32px;
+  }
 }
 .badge-menu-item {
   position: absolute;
   top: 12px;
-  left: 23px;
-  line-height: 1.25;
+  left: 15px;
+  z-index: 2;
+
   background-color: rgba(212, 19, 13, 1);
   color: #fff;
-  border-radius: 8px;
-  padding: 4px 6px;
-  font-size: 9px;
-  font-weight: bold;
+  border-radius: 999px; // hack to produce a circle
+  padding: 3px 5px;
+
+  line-height: 1;
+  font-size: 11px;
+  font-weight: normal;
+
+  .sidenav & {
+    left: 0;
+  }
 }
 
 #root, #standalone {

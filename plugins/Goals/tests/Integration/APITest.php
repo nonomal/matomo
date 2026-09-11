@@ -9,10 +9,14 @@
 
 namespace Piwik\Plugins\Goals\tests\Integration;
 
+use Piwik\Common;
+use Piwik\Db;
+use Piwik\Piwik;
 use Piwik\Plugins\Goals\API;
 use Piwik\Tests\Framework\Fixture;
 use Piwik\Tests\Framework\Mock\FakeAccess;
 use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
+use Piwik\Tracker\GoalManager;
 
 /**
  * @group Goals
@@ -36,6 +40,11 @@ class APITest extends IntegrationTestCase
      * @var int
      */
     private $idSiteTwo;
+
+    /**
+     * @var int
+     */
+    private $idVisit = 0;
 
     public function setUp(): void
     {
@@ -85,9 +94,76 @@ class APITest extends IntegrationTestCase
 
     public function testAddGoalShouldSucceedIfAllFieldsGiven()
     {
-        $idGoal = $this->api->addGoal($this->idSite, 'MyName', 'url', 'http://www.test.de', 'exact', true, 50, true, 'desc', true);
+        $idGoal = $this->api->addGoal($this->idSite, 'MyName', 'event_action', 'test', 'exact', true, 50, true, 'desc', true);
 
-        $this->assertGoal($idGoal, 'MyName', 'desc', 'url', 'http://www.test.de', 'exact', 1, 50, 1, 1);
+        $this->assertGoal($idGoal, 'MyName', 'desc', 'event_action', 'test', 'exact', 1, 50, 1, 1);
+    }
+
+    /**
+     * @dataProvider getTooLongGoalFields
+     */
+    public function testAddGoalShouldThrowIfAFieldDoesNotFitItsColumn($name, $pattern, $description)
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('General_ValidatorErrorCharacterTooLong');
+
+        $this->api->addGoal($this->idSite, $name, 'title', $pattern, 'contains', false, false, false, $description);
+    }
+
+    /**
+     * @dataProvider getTooLongGoalFields
+     */
+    public function testUpdateGoalShouldThrowIfAFieldDoesNotFitItsColumn($name, $pattern, $description)
+    {
+        $idGoal = $this->createAnyGoal();
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('General_ValidatorErrorCharacterTooLong');
+
+        $this->api->updateGoal($this->idSite, $idGoal, $name, 'title', $pattern, 'contains', false, false, false, $description);
+    }
+
+    public function getTooLongGoalFields(): iterable
+    {
+        yield 'name' => [str_repeat('a', 51), 'pattern', ''];
+        yield 'pattern' => ['MyName', str_repeat('a', 256), ''];
+        yield 'description' => ['MyName', 'pattern', str_repeat('a', 256)];
+    }
+
+    public function testAddGoalShouldThrowIfTheMatchAttributeDoesNotFitItsColumn()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('General_ValidatorErrorCharacterTooLong');
+
+        $this->api->addGoal($this->idSite, 'MyName', str_repeat('a', 21), 'pattern', 'contains');
+    }
+
+    public function testAddGoalShouldCountUnsanitizedCharactersOnly()
+    {
+        // a name of 50 characters is accepted by the goal form, so sanitizing it must not make it too long
+        $name = str_repeat('a', 46) . ' & b';
+
+        $idGoal = $this->api->addGoal($this->idSite, Common::sanitizeInputValue($name), 'title', 'pattern', 'contains');
+
+        $this->assertSame(1, $idGoal);
+    }
+
+    public function testAddGoalShouldThrowIfEventValueAsRevenueIsUsedForNonEventGoal()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage("'useEventValueAsRevenue' can only be 1 if the goal matches an event attribute.");
+
+        $this->api->addGoal($this->idSite, 'MyName', 'url', 'http://www.test.de', 'exact', false, false, false, '', true);
+    }
+
+    public function testUpdateGoalShouldThrowIfEventValueAsRevenueIsUsedForNonEventGoal()
+    {
+        $idGoal = $this->createAnyGoal();
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage("'useEventValueAsRevenue' can only be 1 if the goal matches an event attribute.");
+
+        $this->api->updateGoal($this->idSite, $idGoal, 'MyName', 'url', 'http://www.test.de', 'exact', false, false, false, '', true);
     }
 
     public function testAddGoalShouldSucceedIfExactPageTitle()
@@ -104,12 +180,46 @@ class APITest extends IntegrationTestCase
         $this->assertGoal($idGoal, 'MyName', '', 'title', 'rere(.*)', 'regex', 1, 50, 1);
     }
 
+    public function testAddGoalShouldPreservePlusCharacterInRegexPattern()
+    {
+        // a "+" must not be turned into a space when saving a goal
+        $idGoal = $this->api->addGoal($this->idSite, 'MyName', 'url', '\/one_\d+\.php$', 'regex');
+
+        $this->assertGoal($idGoal, 'MyName', '', 'url', '\/one_\d+\.php$', 'regex');
+    }
+
+    public function testAddGoalShouldPreservePlusCharacterInNameAndDescription()
+    {
+        // a "+" must not be turned into a space when saving a goal
+        $idGoal = $this->api->addGoal($this->idSite, 'My + Name', 'title', 'a+b', 'contains', false, false, false, 'desc + text');
+
+        $this->assertGoal($idGoal, 'My + Name', 'desc + text', 'title', 'a+b', 'contains');
+    }
+
+    public function testUpdateGoalShouldPreservePlusCharacterInRegexPattern()
+    {
+        // a "+" must not be turned into a space when updating a goal
+        $idGoal = $this->api->addGoal($this->idSite, 'MyName', 'title', 'rere(.*)', 'regex');
+
+        $this->api->updateGoal($this->idSite, $idGoal, 'My + Name', 'title', '(?!Postuler$).+', 'regex', false, false, false, 'desc + text');
+
+        $this->assertGoal($idGoal, 'My + Name', 'desc + text', 'title', '(?!Postuler$).+', 'regex');
+    }
+
     public function testAddGoalShouldThrowExceptionIfPatternTypeIsInvalid()
     {
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage('General_ValidatorErrorXNotWhitelisted');
 
         $this->api->addGoal($this->idSite, 'MyName', 'external_website', 'www.test.de', 'invalid');
+    }
+
+    public function testAddGoalShouldThrowExceptionIfPatternIsEmptyForExternalWebsite()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('General_PleaseSpecifyValue');
+
+        $this->api->addGoal($this->idSite, 'MyName', 'external_website', '', 'contains');
     }
 
     public function testAddGoalShouldThrowExceptionIfPatternRegexIsInvalid()
@@ -174,6 +284,15 @@ class APITest extends IntegrationTestCase
         $this->api->updateGoal($this->idSite, $idGoal, 'MyName', 'url', 'www.test.de', 'exact');
     }
 
+    public function testUpdateGoalShouldThrowExceptionIfPatternIsEmptyForExternalWebsite()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('General_PleaseSpecifyValue');
+
+        $idGoal = $this->createAnyGoal();
+        $this->api->updateGoal($this->idSite, $idGoal, 'MyName', 'external_website', '', 'contains');
+    }
+
     public function testUpdateGoalShouldNotThrowExceptionIfPatternTypeIsExactAndMatchAttributeIsEvent()
     {
         $idGoal = $this->createAnyGoal();
@@ -182,6 +301,40 @@ class APITest extends IntegrationTestCase
         $this->api->updateGoal($this->idSite, $idGoal, 'MyName', 'event_name', 'www.test.de', 'exact');
 
         $this->assertSame(1, $idGoal);
+    }
+
+    /**
+     * @dataProvider getNonGoalIdGoals
+     */
+    public function testUpdateGoalShouldThrowIfTheSiteHasNoSuchGoal($idGoal)
+    {
+        $this->createAnyGoal();
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('There is no goal with id');
+
+        $this->api->updateGoal($this->idSite, $idGoal, 'UpdatedName', 'file', 'http://www.updatetest.de', 'contains');
+    }
+
+    public function testUpdateGoalShouldThrowIfTheGoalBelongsToAnotherSite()
+    {
+        $idGoal = $this->createAnyGoal();
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('There is no goal with id');
+
+        $this->api->updateGoal($this->idSiteTwo, $idGoal, 'UpdatedName', 'file', 'http://www.updatetest.de', 'contains');
+    }
+
+    public function testUpdateGoalShouldThrowIfTheGoalWasDeleted()
+    {
+        $idGoal = $this->createAnyGoal();
+        $this->api->deleteGoal($this->idSite, $idGoal);
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('There is no goal with id');
+
+        $this->api->updateGoal($this->idSite, $idGoal, 'UpdatedName', 'file', 'http://www.updatetest.de', 'contains');
     }
 
     public function testUpdateGoalShouldUpdateAllGivenFields()
@@ -231,6 +384,45 @@ class APITest extends IntegrationTestCase
 
         $this->api->deleteGoal($this->idSite, $idGoal);
         $this->assertHasNoGoals();
+    }
+
+    public function testDeleteGoalShouldDeleteTheConversionsOfThatGoal()
+    {
+        $idGoal = $this->createAnyGoal();
+        $this->trackedConversion($this->idSite, $idGoal);
+        $this->trackedConversion($this->idSiteTwo, $idGoal);
+
+        $this->api->deleteGoal($this->idSite, $idGoal);
+
+        $this->assertSame(0, $this->getConversionCount($this->idSite, $idGoal));
+        $this->assertSame(1, $this->getConversionCount($this->idSiteTwo, $idGoal));
+    }
+
+    /**
+     * @dataProvider getNonGoalIdGoals
+     */
+    public function testDeleteGoalShouldNotDeleteConversionsOfIdGoalsThatAreNoGoal($idGoal)
+    {
+        $this->createAnyGoal();
+        $this->trackedConversion($this->idSite, GoalManager::IDGOAL_ORDER);
+        $this->trackedConversion($this->idSite, GoalManager::IDGOAL_CART);
+
+        $this->api->deleteGoal($this->idSite, $idGoal);
+
+        $this->assertHasGoals();
+        $this->assertSame(1, $this->getConversionCount($this->idSite, GoalManager::IDGOAL_ORDER));
+        $this->assertSame(1, $this->getConversionCount($this->idSite, GoalManager::IDGOAL_CART));
+    }
+
+    public function getNonGoalIdGoals(): iterable
+    {
+        yield 'ecommerce order' => [GoalManager::IDGOAL_ORDER];
+        yield 'abandoned cart' => [GoalManager::IDGOAL_CART];
+        yield 'ecommerce order as string' => ['0'];
+        yield 'abandoned cart as string' => ['-1'];
+        yield 'ecommerce order label' => [Piwik::LABEL_ID_GOAL_IS_ECOMMERCE_ORDER];
+        yield 'abandoned cart label' => [Piwik::LABEL_ID_GOAL_IS_ECOMMERCE_CART];
+        yield 'unknown goal' => [999];
     }
 
     public function testGetGoalShouldThrowExceptionIfNotEnoughPermission()
@@ -343,6 +535,33 @@ class APITest extends IntegrationTestCase
     private function getGoals()
     {
         return $this->api->getGoals($this->idSite);
+    }
+
+    private function trackedConversion(int $idSite, int $idGoal): void
+    {
+        $this->idVisit++;
+
+        Db::query(
+            'INSERT INTO ' . Common::prefixTable('log_conversion')
+            . ' (idvisit, idsite, idvisitor, server_time, idgoal, buster, url) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+                $this->idVisit,
+                $idSite,
+                Common::hex2bin('0123456789abcdef'),
+                '2014-01-01 00:00:00',
+                $idGoal,
+                0,
+                'http://example.org',
+            ]
+        );
+    }
+
+    private function getConversionCount(int $idSite, int $idGoal): int
+    {
+        return (int) Db::fetchOne(
+            'SELECT COUNT(*) FROM ' . Common::prefixTable('log_conversion') . ' WHERE idsite = ? AND idgoal = ?',
+            [$idSite, $idGoal]
+        );
     }
 
     private function createAnyGoal()

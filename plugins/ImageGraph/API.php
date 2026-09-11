@@ -18,6 +18,7 @@ use Piwik\DataTable;
 use Piwik\DataTable\Map;
 use Piwik\Exception\InvalidDimensionException;
 use Piwik\Filesystem;
+use Piwik\Http\SecurityHeaders;
 use Piwik\Period;
 use Piwik\Piwik;
 use Piwik\Request as PiwikRequest;
@@ -170,6 +171,12 @@ class API extends \Piwik\Plugin\API
         $idDimension = false
     ) {
         Piwik::checkUserHasViewAccess($idSite);
+
+        // a graph may only be streamed to the browser by the top-level request, so it is checked
+        // upfront and no graph is rendered for an output mode that will be refused anyway
+        if (self::isStreamingOutputType($outputType) && Request::isCurrentApiRequestNestedInAnotherApiRequest()) {
+            throw new Exception('A graph can only be sent to the browser by the top-level request.');
+        }
 
         // Health check - should we also test for GD2 only?
         if (!SettingsServer::isGdExtensionEnabled()) {
@@ -425,6 +432,7 @@ class API extends \Piwik\Plugin\API
                     'hideMetricsDoc' => false,
                     'idSubtable' => $idSubtable,
                     'showRawMetrics' => false,
+                    'format_metrics' => 0,
                 ];
                 /** @var array $processedReport */
                 $processedReport = Request::processRequest('API.getProcessedReport', $parameters);
@@ -470,8 +478,7 @@ class API extends \Piwik\Plugin\API
                     }
                     $i++;
                 }
-            } else // if the report has no dimension we have multiple reports each with only one row within the reportData
-            {
+            } else { // if the report has no dimension we have multiple reports each with only one row within the reportData
                 /** @var DataTable[] $periodsData */
                 $periodsData = array_values($reportData->getDataTables());
                 $periodsCount = count($periodsData);
@@ -582,9 +589,21 @@ class API extends \Piwik\Plugin\API
 
             case self::GRAPH_OUTPUT_INLINE:
             default:
+                // the graph library streams the image and its content type itself, so ours go first
+                SecurityHeaders::sendForDataResponse();
+
                 $graph->sendToBrowser();
                 exit;
         }
+    }
+
+    /**
+     * Whether the given output mode streams the graph to the browser. Mirrors the output modes
+     * handled by the switch in {@see get()}, where any unknown mode means inline.
+     */
+    private static function isStreamingOutputType(int $outputType): bool
+    {
+        return !in_array($outputType, [self::GRAPH_OUTPUT_FILE, self::GRAPH_OUTPUT_PHP], true);
     }
 
     private function setFilterTruncate(int $default): void
@@ -592,9 +611,13 @@ class API extends \Piwik\Plugin\API
         $_GET['filter_truncate'] = PiwikRequest::fromRequest()->getIntegerParameter('filter_truncate', $default);
     }
 
-    private static function parseOrdinateValue($ordinateValue)
+    private static function parseOrdinateValue($ordinateValue): float
     {
-        $ordinateValue = @str_replace(',', '.', $ordinateValue);
+        if (is_numeric($ordinateValue)) {
+            return (float) $ordinateValue;
+        }
+
+        $ordinateValue = str_replace(',', '.', (string) $ordinateValue);
 
         // convert hh:mm:ss formatted time values to number of seconds
         if (preg_match('/([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\.[0-9]{2})?)/', $ordinateValue, $matches)) {
@@ -606,7 +629,13 @@ class API extends \Piwik\Plugin\API
         }
 
         // OK, only numbers from here please (strip out currency sign)
-        return preg_replace('/[^0-9.]/', '', $ordinateValue);
+        $ordinateValue = preg_replace('/[^0-9.]/', '', $ordinateValue);
+
+        if (empty($ordinateValue) || $ordinateValue === '.') {
+            return 0.0;
+        }
+
+        return (float) $ordinateValue;
     }
 
     private static function getFontPath(string $font): string

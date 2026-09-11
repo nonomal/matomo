@@ -25,12 +25,12 @@ describe('AIAgents', function () {
   });
 
   it('should display the list of supported evolution metrics', async function () {
-    await page.hover('.jqplot-seriespicker');
-
-    const selectedMetrics = await page.$$('.jqplot-seriespicker input.select:checked');
+    // the picker options are always present in the DOM (the dropdown is only hidden
+    // until the toggle is clicked), so the checked state can be read without opening it
+    const selectedMetrics = await page.$$('.metrics-picker__options input:checked');
     expect(selectedMetrics.length).to.equal(1);
 
-    const selectedMetricLabel = await page.$('.jqplot-seriespicker input.select:checked ~ span');
+    const selectedMetricLabel = await page.$('.metrics-picker__options input:checked ~ .metrics-picker__title');
     expect(await selectedMetricLabel.getProperty('textContent')).to.match(/AI Agent Visits/);
   });
 
@@ -38,41 +38,51 @@ describe('AIAgents', function () {
     const sparklines = await page.$$('.sparkline.linked');
 
     expect(sparklines.length).to.equal(10);
-    await sparklines[5].click();
+
+    // click the "Human Visits" sparkline (a non-default metric) and confirm the metric picker
+    // follows the click. The redesigned grid keeps the card title in .metricValue__title, so find
+    // the card by title rather than a fixed index (the order differs from the legacy markup).
+    const titles = await page.evaluate(() => Array.prototype.map.call(
+      document.querySelectorAll('.sparkline.linked'),
+      (card) => {
+        const title = card.querySelector('.metricValue__title');
+        return title ? title.textContent.trim() : '';
+      },
+    ));
+    const humanVisitsIndex = titles.indexOf('Human Visits');
+    expect(humanVisitsIndex).to.be.greaterThan(-1);
+    await sparklines[humanVisitsIndex].click();
     await page.waitForNetworkIdle();
 
-    await page.hover('.jqplot-seriespicker');
-
-    const selectedMetrics = await page.$$('.jqplot-seriespicker input.select:checked');
+    const selectedMetrics = await page.$$('.metrics-picker__options input:checked');
     expect(selectedMetrics.length).to.equal(1);
 
-    const selectedMetricLabel = await page.$('.jqplot-seriespicker input.select:checked ~ span');
+    const selectedMetricLabel = await page.$('.metrics-picker__options input:checked ~ .metrics-picker__title');
     expect(await selectedMetricLabel.getProperty('textContent')).to.match(/Human Visits/);
   });
 
   it('should allow selecting multiple metrics', async function () {
     let metricLabels;
 
-    // add "AI Agent Visits"
-    await page.hover('.jqplot-seriespicker');
-
-    metricLabels = await page.$$('.jqplot-seriespicker label');
+    // add "AI Agent Visits" (the dropdown must be open to click an option label)
+    await page.click('.metrics-picker__toggle');
+    await page.waitForSelector('.metrics-picker__options label');
+    metricLabels = await page.$$('.metrics-picker__options label');
 
     await metricLabels[0].click();
     await page.waitForNetworkIdle();
 
     // add "Visits"
-    await page.hover('.jqplot-seriespicker');
-
-    metricLabels = await page.$$('.jqplot-seriespicker label');
+    await page.click('.metrics-picker__toggle');
+    await page.waitForSelector('.metrics-picker__options label');
+    metricLabels = await page.$$('.metrics-picker__options label');
 
     await metricLabels[12].click();
     await page.waitForNetworkIdle();
 
-    // check three metrics are selected/visible
-    await page.hover('.jqplot-seriespicker');
-
-    const selectedMetrics = await page.$$('.jqplot-seriespicker input.select:checked');
+    // check three metrics are selected/visible (picker rebuilt closed after the
+    // last selection, so the checked count can be read without reopening it)
+    const selectedMetrics = await page.$$('.metrics-picker__options input:checked');
     expect(selectedMetrics.length).to.equal(3);
 
     await page.mouse.move(-10, -10);

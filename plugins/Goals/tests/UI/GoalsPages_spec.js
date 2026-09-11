@@ -11,6 +11,54 @@ describe("GoalsPages", function () {
   var generalParams = 'idSite=1&period=year&date=2012-08-09',
     urlBaseGeneric = 'module=CoreHome&action=index&',
     urlBase = urlBaseGeneric + generalParams;
+  const findSparkline = async function (text, childSelector = null) {
+    await page.waitForFunction((sparklineText, selector) => {
+      const sparkline = window.$('.sparkline').filter((index, element) => {
+        // The redesigned card deduplicates titles (e.g. "Revenue"), so a distinguishing label
+        // (e.g. "Revenue Left In Cart") may only appear in the evolution badge's title attribute.
+        const $el = window.$(element);
+        return $el.text().toLowerCase().includes(sparklineText)
+          || ($el.find('.evolutionBadge').attr('title') || '').toLowerCase().includes(sparklineText);
+      }).first();
+
+      if (!sparkline.length) {
+        return false;
+      }
+
+      return selector ? !!sparkline.find(selector).length : true;
+    }, {}, text, childSelector);
+
+    return page.evaluateHandle((sparklineText, selector) => {
+      const sparkline = window.$('.sparkline').filter((index, element) => {
+        // The redesigned card deduplicates titles (e.g. "Revenue"), so a distinguishing label
+        // (e.g. "Revenue Left In Cart") may only appear in the evolution badge's title attribute.
+        const $el = window.$(element);
+        return $el.text().toLowerCase().includes(sparklineText)
+          || ($el.find('.evolutionBadge').attr('title') || '').toLowerCase().includes(sparklineText);
+      }).first();
+
+      return selector ? sparkline.find(selector).get(0) : sparkline.get(0);
+    }, text, childSelector);
+  };
+
+  const trackRequests = async function (action) {
+    const requests = [];
+    const requestHandler = (request) => {
+      requests.push({
+        resourceType: request.resourceType(),
+        url: request.url(),
+      });
+    };
+
+    page.webpage.on('request', requestHandler);
+    try {
+      await action();
+    } finally {
+      page.webpage.removeListener('request', requestHandler);
+    }
+
+    return requests;
+  };
 
   // goals pages
   it('should load the goals > ecommerce page correctly', async function () {
@@ -24,10 +72,19 @@ describe("GoalsPages", function () {
     var monthParams = 'idSite=1&period=month&date=2012-01-09';
     await page.goto("?" + urlBase + "#?" + monthParams + "&category=Goals_Ecommerce&subcategory=General_Overview");
     await page.waitForNetworkIdle();
-    const element = await page.jQuery('#rightcolumn .sparkline:eq(1) .metricEvolution');
-    await element.hover();
-    const tooltip = await page.waitForSelector('.ui-tooltip', { visible: true });
-    expect(await tooltip.screenshot()).to.matchImage('revenue_incart_tooltip');
+
+    // The redesigned evolution badge carries its comparison detail in a native title tooltip
+    // (there is no jQuery .ui-tooltip to screenshot), so assert the badge title text instead.
+    const badge = await findSparkline('left in cart', '.evolutionBadge');
+    const tooltip = await page.evaluate((element) => element.getAttribute('title'), badge);
+
+    // Assert the complete evolution-badge title (General_EvolutionSummaryGeneric): current value,
+    // current period, previous value, previous period and the evolution %. This restores the
+    // coverage the removed revenue_incart_tooltip screenshot gave, as a debuggable text diff.
+    expect(tooltip).to.equal(
+      '$10,000,007,630.33 Revenue Left In Cart in January 2012 compared to '
+      + '$0 Revenue Left In Cart in December 2011. Evolution: 100%'
+    );
   });
 
   it('should show the selected last year comparison period in an ecommerce sparkline tooltip', async function() {
@@ -35,14 +92,11 @@ describe("GoalsPages", function () {
     await page.goto("?" + urlBaseGeneric + compareMonthParams + "#?" + compareMonthParams + "&category=Goals_Ecommerce&subcategory=General_Overview");
     await page.waitForNetworkIdle();
 
-    const element = await page.jQuery('#rightcolumn .sparkline:eq(1) .metricEvolution');
-    await element.hover();
-    await page.waitForSelector('.ui-tooltip', { visible: true });
+    const badge = await findSparkline('left in cart', '.evolutionBadge');
+    const tooltip = await page.evaluate((element) => element.getAttribute('title'), badge);
 
-    const tooltipContent = await page.evaluate(() => $('.ui-tooltip:visible').text());
-
-    expect(tooltipContent).to.contain('January 2012');
-    expect(tooltipContent).to.contain('January 2011');
+    expect(tooltip).to.contain('January 2012');
+    expect(tooltip).to.contain('January 2011');
   });
 
   it('should load the goals > overview page correctly', async function () {
@@ -95,12 +149,52 @@ describe("GoalsPages", function () {
   });
 
   it('should update the evolution chart if a sparkline is clicked', async function () {
-    elem = await page.jQuery('.sparkline.linked:contains(conversion rate)');
+    const elem = await findSparkline('conversion rate');
     await elem.click();
     await page.waitForNetworkIdle();
     await page.mouse.move(-10, -10);
 
     expect(await page.screenshotSelector('.pageWrap')).to.matchImage('individual_goal_updated');
+  });
+
+  it('should include the abandoned cart goal in ecommerce abandoned cart sparkline links', async function () {
+    var monthParams = 'idSite=1&period=month&date=2012-01-09';
+    await page.goto("?" + urlBase + "#?" + monthParams + "&category=Goals_Ecommerce&subcategory=General_Overview");
+    await page.waitForNetworkIdle();
+
+    const sparklineImage = await findSparkline('left in cart', 'img');
+    // The redesigned Sparkline component renders the chart <img> with a resolved src rather than
+    // the legacy lazy-loaded data-src attribute.
+    const imageSrc = await page.evaluate((element) => element.getAttribute('src'), sparklineImage);
+
+    expect(imageSrc).to.contain('idGoal=ecommerceAbandonedCart');
+
+    await page.goto("?" + urlBase + "#?" + generalParams + "&category=Goals_Goals&subcategory=1");
+    await page.waitForNetworkIdle();
+  });
+
+  it('should reload the main evolution graph with the abandoned cart goal when an abandoned cart sparkline is clicked', async function () {
+    var monthParams = 'idSite=1&period=month&date=2012-01-09';
+    await page.goto("?" + urlBase + "#?" + monthParams + "&category=Goals_Ecommerce&subcategory=General_Overview");
+    await page.waitForNetworkIdle();
+
+    const requests = await trackRequests(async () => {
+      const sparkline = await findSparkline('left in cart');
+      await sparkline.click();
+      await page.waitForNetworkIdle();
+    });
+
+    const evolutionGraphRequest = requests.find((request) => {
+      return request.resourceType === 'xhr'
+        && request.url.indexOf('module=Goals') !== -1
+        && request.url.indexOf('action=getEvolutionGraph') !== -1
+        && request.url.indexOf('idGoal=ecommerceAbandonedCart') !== -1;
+    });
+
+    expect(evolutionGraphRequest).to.be.ok;
+
+    await page.goto("?" + urlBase + "#?" + generalParams + "&category=Goals_Goals&subcategory=1");
+    await page.waitForNetworkIdle();
   });
 
   // should load the row evolution [see #11526]

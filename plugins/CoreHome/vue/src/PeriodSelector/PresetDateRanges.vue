@@ -22,6 +22,10 @@
       >
         <label
           :class="{ 'selected-period-label': checkedPresetId === preset.id }"
+          :title="checkedPresetId === preset.id
+            ? ''
+            : translate('General_DoubleClickToChangePeriod')"
+          @dblclick="handlePresetDoubleClick(preset.id)"
         >
           <input
             type="radio"
@@ -29,6 +33,7 @@
             :name="presetInputName"
             :id="`preset_date_${preset.id}`"
             :checked="checkedPresetId === preset.id"
+            @click="handlePresetClick(preset.id)"
             @change="handlePresetSelected(preset.id)"
           />
           <span class="preset-option-text">{{ translate(preset.labelKey) }}</span>
@@ -67,10 +72,6 @@ let nextPresetDateRangeGroupId = 0;
 
 export default defineComponent({
   props: {
-    modelValue: {
-      type: String as PropType<PresetDateRangeId|null>,
-      default: null,
-    },
     checkedPresetId: {
       type: String as PropType<PresetDateRangeId|null>,
       default: null,
@@ -100,7 +101,7 @@ export default defineComponent({
       presetInputName,
     };
   },
-  emits: ['update:modelValue', 'select'],
+  emits: ['select', 'dblclick'],
   computed: {
     presetDateRanges(): PresetDateRangeOption[] {
       return PRESET_DATE_RANGES.filter(
@@ -120,11 +121,26 @@ export default defineComponent({
   },
   methods: {
     translate,
+    handlePresetClick(presetId: PresetDateRangeId) {
+      if (this.checkedPresetId !== presetId) {
+        return;
+      }
+
+      this.handlePresetSelected(presetId);
+    },
     handlePresetSelected(presetId: PresetDateRangeId) {
       const resolvedPreset = resolvePresetDateRange(presetId, this.today);
 
-      this.$emit('update:modelValue', presetId);
       this.$emit('select', {
+        ...resolvedPreset,
+        startDate: clampDateToBounds(resolvedPreset.startDate, this.minDate, this.maxDate),
+        endDate: clampDateToBounds(resolvedPreset.endDate, this.minDate, this.maxDate),
+      } as PresetDateRangeSelection);
+    },
+    handlePresetDoubleClick(presetId: PresetDateRangeId) {
+      const resolvedPreset = resolvePresetDateRange(presetId, this.today);
+
+      this.$emit('dblclick', {
         ...resolvedPreset,
         startDate: clampDateToBounds(resolvedPreset.startDate, this.minDate, this.maxDate),
         endDate: clampDateToBounds(resolvedPreset.endDate, this.minDate, this.maxDate),

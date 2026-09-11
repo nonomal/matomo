@@ -16,18 +16,30 @@ describe('Marketplace_RequestTrial', function () {
   before(function () {
     testEnvironment.overrideConfig('General', 'enable_plugins_admin', '1');
 
-    testEnvironment.consumer = 'validLicense';
+    // a valid license key whose account licenses no plugin, so PaidPlugin1 is trial eligible.
+    // 'validLicense' licenses PaidPlugin1 itself, which correctly suppresses the trial CTA.
+    testEnvironment.consumer = 'validLicenseNoPlugins';
     testEnvironment.idSitesViewAccess = [1];
     testEnvironment.mockMarketplaceApiService = 1;
     testEnvironment.save();
   });
 
-  after(function(){
+  after(async function () {
     delete testEnvironment.consumer;
     delete testEnvironment.fakeIdentity;
     delete testEnvironment.idSitesViewAccess;
     delete testEnvironment.mockMarketplaceApiService;
+
+    // The success-notification test persists Marketplace.PluginTrialRequest.PaidPlugin1
+    // in the option table. With --persist-fixture-data the option survives into sibling
+    // specs sharing this fixture's DB and makes user-mode CTAs render "Trial Requested"
+    // instead of "Request Trial". Wipe it via optionsOverride.
+    testEnvironment.optionsOverride = testEnvironment.optionsOverride || {};
+    testEnvironment.optionsOverride['Marketplace.PluginTrialRequest.PaidPlugin1'] = '[]';
     testEnvironment.save();
+
+    // optionsOverride is applied during proxy bootstrap; trigger one request.
+    await page.goto('?module=API&method=API.getMatomoVersion&format=json');
   });
 
   it('should display a "request trial" button', async function () {

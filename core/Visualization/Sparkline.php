@@ -21,8 +21,12 @@ class Sparkline implements ViewInterface
 {
     public const DEFAULT_WIDTH = 200;
     public const DEFAULT_HEIGHT = 50;
+    public const LINE_THICKNESS = 4;
+    public const POINT_SIZE = 6;
+    // We now create different sized width for Sparklines based on the card designs
+    // This max width will still be adjusted as we create new Sparkline modes.
     public const MAX_WIDTH = 1000;
-    public const MAX_HEIGHT = 1000;
+    public const MAX_HEIGHT = 250;
 
 
     /**
@@ -108,8 +112,10 @@ class Sparkline implements ViewInterface
 
         $sparkline->setWidth($this->getWidth());
         $sparkline->setHeight($this->getHeight());
-        $sparkline->setLineThickness(1);
-        $sparkline->setPadding('5');
+        $sparkline->setLineThickness(self::LINE_THICKNESS);
+        // Pad by at least the point radius so edge dots (first/last, and min/max at the
+        // top/bottom) aren't clipped by the image boundary.
+        $sparkline->setPadding((string) self::POINT_SIZE);
 
         $this->sparkline = $sparkline;
     }
@@ -188,7 +194,7 @@ class Sparkline implements ViewInterface
             $colors = array_merge($defaultColors, $colors); //set default color key, if no key set.
         }
 
-        if (strtolower($colors['backgroundColor']) !== '#ffffff') {
+        if ($this->shouldApplyColor($colors['backgroundColor'])) {
             $sparkline->setBackgroundColorHex($colors['backgroundColor']);
         } else {
             $sparkline->deactivateBackgroundColor();
@@ -203,26 +209,33 @@ class Sparkline implements ViewInterface
             $sparkline->setLineColorHex($colors['lineColor']);
         }
 
-        if (strtolower($colors['fillColor'] !== "#ffffff")) {
+        if ($this->shouldApplyColor($colors['fillColor'])) {
             $sparkline->setFillColorHex($colors['fillColor']);
         } else {
             $sparkline->deactivateFillColor();
         }
-        if (strtolower($colors['minPointColor'] !== "#ffffff")) {
-            $sparkline->addPoint("minimum", 5, $colors['minPointColor'], $seriesIndex);
+        $pointSize = self::POINT_SIZE;
+        if ($this->shouldApplyColor($colors['minPointColor'])) {
+            $sparkline->addPoint("minimum", $pointSize, $colors['minPointColor'], $seriesIndex);
         }
-        if (strtolower($colors['maxPointColor'] !== "#ffffff")) {
-            $sparkline->addPoint("maximum", 5, $colors['maxPointColor'], $seriesIndex);
+        if ($this->shouldApplyColor($colors['maxPointColor'])) {
+            $sparkline->addPoint("maximum", $pointSize, $colors['maxPointColor'], $seriesIndex);
         }
-        if (strtolower($colors['lastPointColor'] !== "#ffffff")) {
-            $sparkline->addPoint("last", 5, $colors['lastPointColor'], $seriesIndex);
+        if ($this->shouldApplyColor($colors['lastPointColor'])) {
+            $sparkline->addPoint("last", $pointSize, $colors['lastPointColor'], $seriesIndex);
         }
+    }
+
+    private function shouldApplyColor($color): bool
+    {
+        return is_string($color)
+            && strtolower($color) !== '#ffffff';
     }
 
     public function render()
     {
         if (!$this->sparkline instanceof \Davaxi\Sparkline) {
-            return;
+            return null;
         }
 
         if (0 === $this->sparkline->getSeriesCount()) {
@@ -233,5 +246,7 @@ class Sparkline implements ViewInterface
 
         $this->sparkline->display();
         $this->sparkline->destroy();
+
+        return null;
     }
 }

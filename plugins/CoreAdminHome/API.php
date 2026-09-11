@@ -18,6 +18,7 @@ use Piwik\Access;
 use Piwik\ArchiveProcessor\Rules;
 use Piwik\ArchiveProcessor;
 use Piwik\Config;
+use Piwik\Common;
 use Piwik\Container\StaticContainer;
 use Piwik\Archive\ArchiveInvalidator;
 use Piwik\CronArchive;
@@ -27,6 +28,7 @@ use Piwik\Metrics\Formatter;
 use Piwik\Period\Factory;
 use Piwik\Piwik;
 use Piwik\Request as PiwikRequest;
+use Piwik\Request\AuthenticationToken;
 use Piwik\Segment;
 use Piwik\Scheduler\Scheduler;
 use Piwik\SettingsServer;
@@ -109,15 +111,24 @@ class API extends \Piwik\Plugin\API
 
     /**
      * @param string[] $trustedHosts
+     * @param string|null $passwordConfirmation Current user's password confirmation when required by session auth.
      * @return true
      * @internal
      */
-    public function setTrustedHosts($trustedHosts): bool
-    {
+    public function setTrustedHosts(
+        $trustedHosts,
+        #[\SensitiveParameter]
+        ?string $passwordConfirmation = null
+    ): bool {
         Piwik::checkUserHasSuperUserAccess();
 
         if (!Controller::isGeneralSettingsAdminEnabled()) {
             throw new Exception('General settings admin is not enabled');
+        }
+
+        // check password confirmation only when using session auth
+        if (StaticContainer::get(AuthenticationToken::class)->isSessionToken()) {
+            $this->confirmCurrentUserPassword($passwordConfirmation);
         }
 
         if (!empty($trustedHosts)) {
@@ -401,18 +412,17 @@ class API extends \Piwik\Plugin\API
 
     private function shouldRequireSuperUserForArchiveReports(): bool
     {
-        $rootApiMethod = Request::getRootApiRequestMethod();
-        $requestParameters = PiwikRequest::fromRequest()->getParameters();
-        $currentApiMethod = Request::getMethodIfApiRequest($requestParameters);
-
-        // Bulk subrequests can arrive without module=API, so fall back to raw method.
-        if (empty($currentApiMethod)) {
-            $currentApiMethod = (string) ($requestParameters['method'] ?? '');
-        }
+        $rootApiMethod = $this->normalizeApiMethodName(Request::getRootApiRequestMethod() ?: '');
+        $currentApiMethod = $this->normalizeApiMethodName(PiwikRequest::fromRequest()->getStringParameter('method', ''));
 
         // Require superuser for direct archiveReports calls and archiveReports inside bulk requests.
         return $rootApiMethod === 'CoreAdminHome.archiveReports'
             || ($rootApiMethod === 'API.getBulkRequest' && $currentApiMethod === 'CoreAdminHome.archiveReports');
+    }
+
+    private function normalizeApiMethodName(string $method): string
+    {
+        return preg_replace('/[^\w\.]+/', '', Common::sanitizeInputValue($method));
     }
 
     /**

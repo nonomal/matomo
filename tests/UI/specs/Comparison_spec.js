@@ -44,6 +44,88 @@ describe("Comparison", function () {
         "moduleToWidgetize=CoreHome&actionToWidgetize=renderWidgetContainer&disableLink=1&widget=1&idSite=1&period=range&date=2012-01-12,2014-02-12&compareDates[]=2011-01-31,2013-02-31&comparePeriods[]=range"
     ;
 
+    async function getSparklineEvolutionForMetric(metricText) {
+        await page.waitForSelector('.sparkline .evolutionBadge');
+
+        return page.evaluate(function (text) {
+            function normalize(value) {
+                return value.replace(/\s+/g, ' ').trim().toLowerCase();
+            }
+
+            var textToFind = text.toLowerCase();
+            var sparklines = Array.prototype.slice.call(document.querySelectorAll('.sparkline'));
+
+            for (var i = 0; i < sparklines.length; i++) {
+                // The redesigned card exposes the metric name in its title (segment/date comparison)
+                // or the metric readout title (no comparison), not inline with the value.
+                var titleEl = sparklines[i].querySelector(
+                    '.sparklineCard__title, .sparklineSegmentComparisonCard__title,'
+                    + ' .sparklineDateComparison__title, .metricValue__title'
+                );
+                if (!titleEl || normalize(titleEl.textContent).indexOf(textToFind) === -1) {
+                    continue;
+                }
+
+                var badge = sparklines[i].querySelector('.evolutionBadge');
+                if (!badge) {
+                    continue;
+                }
+
+                // Direction comes from the sign of the badge's own percent readout: EvolutionBadge
+                // prepends '+' for an increase and keeps the leading minus (ASCII '-' or localised
+                // U+2212) for a decrease. Polarity (good/bad) is the evolutionBadge--positive /
+                // --negative modifier, checked separately in expectEvolutionPolarity().
+                var value = badge.querySelector('.evolutionBadge__value');
+                var valueText = value ? value.textContent.trim() : '';
+                var sign = valueText.charAt(0);
+                // U+2212 is the localised minus (fi/sv/et/...); the component keeps it for decreases.
+                var localisedMinus = String.fromCharCode(0x2212);
+                var direction = 'neutral';
+                if (sign === '+') {
+                    direction = 'up';
+                } else if (sign === '-' || sign === localisedMinus) {
+                    direction = 'down';
+                }
+
+                return {
+                    className: badge.className,
+                    direction: direction,
+                    text: valueText,
+                };
+            }
+
+            return null;
+        }, metricText);
+    }
+
+    function expectEvolutionPolarity(evolution, isLowerValueBetter) {
+        expect(evolution).to.not.equal(null);
+
+        var isPositive = evolution.className.indexOf('evolutionBadge--positive') !== -1;
+        var isNegative = evolution.className.indexOf('evolutionBadge--negative') !== -1;
+        expect(isPositive || isNegative).to.equal(true);
+
+        var isUp = evolution.direction === 'up';
+        var isDown = evolution.direction === 'down';
+        expect(isUp || isDown).to.equal(true);
+
+        if (isUp) {
+            if (isLowerValueBetter) {
+                expect(evolution.className).to.contain('evolutionBadge--negative');
+            } else {
+                expect(evolution.className).to.contain('evolutionBadge--positive');
+            }
+        }
+
+        if (isDown) {
+            if (isLowerValueBetter) {
+                expect(evolution.className).to.contain('evolutionBadge--positive');
+            } else {
+                expect(evolution.className).to.contain('evolutionBadge--negative');
+            }
+        }
+    }
+
     it('should compare periods correctly when comparing the last period', async () => {
         await page.goto(dashboardUrl);
         await page.waitForNetworkIdle();
@@ -296,12 +378,39 @@ describe("Comparison", function () {
         expect(await page.screenshot({ fullPage: true })).to.matchImage('visits_overview_widget_largerange');
     });
 
+    it('should apply lower-is-better polarity to comparison sparkline evolution', async () => {
+        await page.goto(visitOverviewSparklines);
+        await page.waitForNetworkIdle();
+
+        var visitsEvolution = await getSparklineEvolutionForMetric('visits');
+        expectEvolutionPolarity(visitsEvolution, false);
+
+        var bounceEvolution = await getSparklineEvolutionForMetric('bounce rate');
+        expectEvolutionPolarity(bounceEvolution, true);
+    });
+
     it('should show evolution metrics correctly formatted in other language', async () => {
         await page.goto(visitOverviewSparklines + '&language=sv');
         await page.waitForNetworkIdle();
+
+        // Series colors only land on jQuery ready, so each sparkline renders uncolored and is then
+        // refetched. Wait for that second round or the screenshot can catch the uncolored images.
+        await page.waitForFunction(
+            () => window.CoreHome.ComparisonsStoreInstance.getAllComparisonSeries().every((s) => !!s.color),
+        );
+        await page.waitForNetworkIdle();
+
         await page.evaluate(function(){
-            // replace all metric names with `metric name` to avoid test failures when metric translation changes
-            $('.sparkline-metrics').each(function(){ $(this).html($(this).find('strong').prop('outerHTML') + ' metric name') });
+            // replace all metric names with `metric name` to avoid test failures when metric
+            // translation changes.
+            $('.sparklineSegmentComparisonCard__title, .sparklineDateComparison__title, .metricValue__title')
+                .each(function(){ $(this).text('metric name') });
+            // Secondary lines merge the value and its (translated) label into a single string, with
+            // a locale-dependent word order, so keep the value and replace everything else.
+            $('.metricValue__secondaryLine').each(function(){
+                var value = $(this).text().match(/\d+(?:[.,\s\u00a0]\d+)*\s*%?/);
+                $(this).text((value ? value[0].trim() + ' ' : '') + 'metric name');
+            });
         });
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('visits_overview_widget_sv');

@@ -88,7 +88,7 @@
        :title="translate('Marketplace_StartFreeTrial')"
     >{{ translate('Marketplace_StartFreeTrial') }}</div>
 
-    <a v-else-if="plugin.isEligibleForFreeTrial && inModal"
+    <a v-else-if="plugin.isEligibleForFreeTrial && inModal && shopVariationUrl"
        class="btn btn-block addToCartLink" target="_blank"
        :title="translate('Marketplace_ClickToCompletePurchase')"
        rel="noreferrer noopener"
@@ -273,6 +273,7 @@ export default defineComponent({
     linkTo(params: QueryParameters) {
       return `?${MatomoUrl.stringify({
         ...MatomoUrl.urlParsed.value,
+        idSite: MatomoUrl.parsed.value.idSite,
         ...params,
       })}`;
     },

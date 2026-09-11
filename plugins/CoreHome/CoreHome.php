@@ -146,6 +146,7 @@ class CoreHome extends \Piwik\Plugin
         $stylesheets[] = "plugins/CoreHome/vue/src/EnrichedHeadline/EnrichedHeadline.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/Notification/Notification.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/QuickAccess/QuickAccess.less";
+        $stylesheets[] = "plugins/CoreHome/vue/src/SearchInput/SearchInput.less";
         $stylesheets[] = "plugins/CoreHome/stylesheets/selector.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/ReportingPage/ReportingPage.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/ReportExport/ReportExport.less";
@@ -155,6 +156,7 @@ class CoreHome extends \Piwik\Plugin
         $stylesheets[] = "plugins/CoreHome/vue/src/PeriodSelector/PeriodSelector.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/MultiPairField/MultiPairField.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/DropdownMenu/DropdownMenu.less";
+        $stylesheets[] = "plugins/CoreHome/vue/src/DraggableList/DraggableList.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/Sparkline/Sparkline.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/FieldArray/FieldArray.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/Comparisons/Comparisons.less";
@@ -162,6 +164,8 @@ class CoreHome extends \Piwik\Plugin
         $stylesheets[] = "plugins/CoreHome/vue/src/PasswordStrength/PasswordStrength.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/EntityDuplicator/EntityDuplicatorModal.less";
         $stylesheets[] = "plugins/CoreHome/vue/src/EntityDuplicator/EntityDuplicatorAction.less";
+        $stylesheets[] = "plugins/CoreHome/vue/src/ReportHeader/ReportHeader.less";
+        $stylesheets[] = "plugins/CoreHome/vue/src/WidgetControls/WidgetControls.less";
     }
 
     public function getJsFiles(&$jsFiles)
@@ -234,6 +238,10 @@ class CoreHome extends \Piwik\Plugin
         $translationKeys[] = 'CoreHome_Menu';
         $translationKeys[] = 'CoreHome_AddTotalsRowDataTable';
         $translationKeys[] = 'CoreHome_RemoveTotalsRowDataTable';
+        $translationKeys[] = 'CoreHome_ShowPercentageValuesDataTable';
+        $translationKeys[] = 'CoreHome_ShowAbsoluteValuesDataTable';
+        $translationKeys[] = 'CoreHome_ShowPercentageValues';
+        $translationKeys[] = 'CoreHome_ShowAbsoluteValues';
         $translationKeys[] = 'CoreHome_PeriodHasOnlyRawData';
         $translationKeys[] = 'CoreHome_PeriodHasOnlyRawDataNoVisitsLog';
         $translationKeys[] = 'SitesManager_NotFound';
@@ -402,6 +410,7 @@ class CoreHome extends \Piwik\Plugin
         $translationKeys[] = 'CoreHome_TechDeprecationWarning';
         $translationKeys[] = 'CoreHome_StartDate';
         $translationKeys[] = 'CoreHome_EndDate';
+        $translationKeys[] = 'CoreHome_InvalidComparisonDateRange';
         $translationKeys[] = 'CoreHome_DataForThisReportHasBeenDisabled';
         $translationKeys[] = 'CoreHome_ChangeVisualization';
         $translationKeys[] = 'CoreHome_ReportConfigure';
@@ -425,6 +434,13 @@ class CoreHome extends \Piwik\Plugin
         $translationKeys[] = 'CoreHome_CopyX';
         $translationKeys[] = 'CoreHome_CopyXDescription';
         $translationKeys[] = 'CoreHome_WebAnalyticsReports';
+        $translationKeys[] = 'General_Widget';
+        // Widget-control actions rendered by the shared CoreHome.WidgetControls component. Registered
+        // here (not in Dashboard) so the component works wherever CoreHome is loaded.
+        $translationKeys[] = 'General_Refresh';
+        $translationKeys[] = 'Dashboard_Minimise';
+        $translationKeys[] = 'Dashboard_Maximise';
+        $translationKeys[] = 'General_Close';
 
         // add admin menu translations
         if (

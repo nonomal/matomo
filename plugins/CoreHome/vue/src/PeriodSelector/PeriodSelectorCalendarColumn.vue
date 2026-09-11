@@ -7,32 +7,24 @@
 
 <template>
   <div class="period-selector-calendar-column">
-    <div
-      :class="{ 'calendar-disabled': uiSelection.type === 'preset' }"
-      :aria-disabled="uiSelection.type === 'preset' ? 'true' : 'false'"
-      @click.capture="$emit('range-preset-date-cell-click-capture', $event)"
-    >
+    <div>
       <DateRangePicker
         v-show="calendarViewport === 'range'"
         class="period-range"
         :start-date="displayRangeStartDate"
         :end-date="displayRangeEndDate"
-        :disabled="uiSelection.type === 'preset'"
         @range-change="$emit('range-change', $event)"
         @submit="$emit('apply-click')"
       />
     </div>
     <div
       class="period-date"
-      :class="{ 'calendar-disabled': uiSelection.type === 'preset' }"
-      :aria-disabled="uiSelection.type === 'preset' ? 'true' : 'false'"
       v-show="calendarViewport === 'single'"
     >
       <PeriodDatePicker
         id="datepicker"
         :period="singleCalendarPeriod"
         :date="singleCalendarSelectedDate"
-        :disabled="uiSelection.type === 'preset'"
         @select="$emit('single-date-select', $event.date)"
       />
     </div>
@@ -43,12 +35,16 @@
       :compare-start-date="compareStartDate"
       :compare-end-date="compareEndDate"
       :compare-period-dropdown-options="comparePeriodDropdownOptions"
+      :show-invalid-comparison-message="showInvalidComparisonMessage"
       @update:isComparing="$emit('update:isComparing', $event)"
       @update:comparePeriodType="$emit('update:comparePeriodType', $event)"
       @update:compareStartDate="$emit('update:compareStartDate', $event)"
       @update:compareEndDate="$emit('update:compareEndDate', $event)"
     />
-    <div class="apply-button-container">
+    <div
+      class="apply-button-container"
+      @mousedown.capture="onApplyButtonInteraction"
+    >
       <input
         type="submit"
         id="calendarApply"
@@ -124,6 +120,10 @@ export default defineComponent({
       type: Array as PropType<Array<{ key: string; value: string }>>,
       required: true,
     },
+    showInvalidComparisonMessage: {
+      type: Boolean,
+      default: false,
+    },
     isApplyEnabled: {
       type: Boolean,
       required: true,
@@ -133,7 +133,7 @@ export default defineComponent({
     'range-change',
     'single-date-select',
     'apply-click',
-    'range-preset-date-cell-click-capture',
+    'disabled-apply-interaction',
     'update:isComparing',
     'update:comparePeriodType',
     'update:compareStartDate',
@@ -141,6 +141,11 @@ export default defineComponent({
   ],
   methods: {
     translate,
+    onApplyButtonInteraction() {
+      if (!this.isApplyEnabled) {
+        this.$emit('disabled-apply-interaction');
+      }
+    },
   },
 });
 </script>

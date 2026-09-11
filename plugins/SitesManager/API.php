@@ -28,6 +28,7 @@ use Piwik\Piwik;
 use Piwik\Plugin\SettingsProvider;
 use Piwik\Request\AuthenticationToken;
 use Piwik\Plugins\CorePluginsAdmin\SettingsMetadata;
+use Piwik\Policy\PolicyManager;
 use Piwik\Plugins\SitesManager\Settings\FilterPIIParameters;
 use Piwik\Plugins\SitesManager\SiteContentDetection\ConsentManagerDetectionAbstract;
 use Piwik\Plugins\SitesManager\SiteContentDetection\SiteContentDetectionAbstract;
@@ -61,7 +62,27 @@ use Piwik\Validators\WhitelistedValue;
  * The existing values can be fetched via "getExcludedIpsGlobal" and "getExcludedQueryParametersGlobal".
  * See also the documentation about <a href='https://matomo.org/docs/manage-websites/' rel='noreferrer' target='_blank'>Managing Websites</a> in Matomo.
  *
- * @phpstan-type SiteData array{idsite: int, name: string, main_url: string, ts_created: string, timezone: string, currency: string, ecommerce: int, sitesearch: int, exclude_unknown_urls: int, excluded_ips: string, excluded_parameters: string, excluded_user_agents: string, group: string, type: string, keep_url_fragment: int, creator_login?: string, timezone_name?: string, currency_name?: string}
+ * @phpstan-type SiteData array{
+ *     idsite: int,
+ *     name: string,
+ *     description: string,
+ *     main_url: string,
+ *     ts_created: string,
+ *     timezone: string,
+ *     currency: string,
+ *     ecommerce: int,
+ *     sitesearch: int,
+ *     exclude_unknown_urls: int,
+ *     excluded_ips: string,
+ *     excluded_parameters: string,
+ *     excluded_user_agents: string,
+ *     group: string,
+ *     type: string,
+ *     keep_url_fragment: int,
+ *     creator_login?: string,
+ *     timezone_name?: string,
+ *     currency_name?: string
+ * }
  * @phpstan-type SettingValues array<string, list<array{name: string, value: mixed}>>
  *
  * @method static \Piwik\Plugins\SitesManager\API getInstance()
@@ -748,6 +769,8 @@ class API extends \Piwik\Plugin\API
      *                                         of `['name' => string, 'value' => mixed]` pairs.
      * @param bool|null $excludeUnknownUrls Whether to track only URLs matching one of the website's registered URLs.
      * @param string|null $excludedReferrers Comma-separated list of hosts/URLs to exclude from referrer detection.
+     * @param string|null $description Optional description providing additional context about this site, such as its
+     *                                 purpose or usage.
      * @return int The ID of the newly created website.
      * @see getKeepURLFragmentsGlobal
      */
@@ -769,7 +792,8 @@ class API extends \Piwik\Plugin\API
         $type = null,
         $settingValues = null,
         $excludeUnknownUrls = null,
-        $excludedReferrers = null
+        $excludedReferrers = null,
+        $description = null
     ): int {
         Piwik::checkUserHasSuperUserAccess();
         SitesManager::dieIfSitesAdminIsDisabled();
@@ -806,6 +830,7 @@ class API extends \Piwik\Plugin\API
         $this->checkValidCurrency($currency);
 
         $bind = ['name' => $siteName];
+        $bind['description'] = $this->checkAndReturnDescription($description);
         $bind['timezone']   = $timezone;
         $bind['currency']   = $currency;
         $bind['main_url']   = '';
@@ -931,7 +956,7 @@ class API extends \Piwik\Plugin\API
     {
         $measurableSettings = $this->settingsProvider->getAllMeasurableSettings($idSite, $idType);
 
-        $this->settingsMetadata->setPluginSettings($measurableSettings, $settingValues);
+        $this->settingsMetadata->setPluginSettings($measurableSettings, $settingValues, $idSite);
 
         return $measurableSettings;
     }
@@ -1548,6 +1573,17 @@ class API extends \Piwik\Plugin\API
             throw new Exception($this->translator->translate('SitesManager_ExceptionNonEmptyQueryParamsForNonCustomType'));
         }
 
+        if (
+            !PolicyManager::checkSettingValueAgainstPolicies(
+                self::OPTION_EXCLUDE_TYPE_QUERY_PARAMS_GLOBAL,
+                $exclusionType,
+                null,
+                PolicyManager::SETTING_TYPE_OPTION
+            )
+        ) {
+            return;
+        }
+
         Option::set(self::OPTION_EXCLUDE_TYPE_QUERY_PARAMS_GLOBAL, $exclusionType);
 
         if ($exclusionType !== SitesManager::URL_PARAM_EXCLUSION_TYPE_NAME_CUSTOM) {
@@ -1615,6 +1651,8 @@ class API extends \Piwik\Plugin\API
      *                                         of `['name' => string, 'value' => mixed]` pairs.
      * @param bool|null $excludeUnknownUrls Whether to track only URLs matching one of the website's registered URLs.
      * @param string|null $excludedReferrers Comma-separated list of hosts/URLs to exclude from referrer detection.
+     * @param string|null $description Optional description providing additional context about this site, such as its
+     *                                 purpose or usage.
      * @see getKeepURLFragmentsGlobal
      */
     public function updateSite(
@@ -1636,7 +1674,8 @@ class API extends \Piwik\Plugin\API
         $type = null,
         $settingValues = null,
         $excludeUnknownUrls = null,
-        $excludedReferrers = null
+        $excludedReferrers = null,
+        $description = null
     ): void {
         Piwik::checkUserHasAdminAccess($idSite);
         SitesManager::dieIfSitesAdminIsDisabled();
@@ -1653,6 +1692,10 @@ class API extends \Piwik\Plugin\API
         if (!is_null($siteName)) {
             $this->checkName($siteName);
             $bind['name'] = $siteName;
+        }
+
+        if (!is_null($description)) {
+            $bind['description'] = $this->checkAndReturnDescription($description);
         }
 
         if (!isset($settingValues)) {
@@ -1984,6 +2027,20 @@ class API extends \Piwik\Plugin\API
     }
 
     /**
+     * Normalises the site description and ensures it does not exceed the allowed length.
+     */
+    private function checkAndReturnDescription(?string $description): string
+    {
+        $description = trim((string) $description);
+
+        if (mb_strlen($description) > 255) {
+            throw new Exception(Piwik::translate('SitesManager_ExceptionInvalidWebsiteDescription'));
+        }
+
+        return $description;
+    }
+
+    /**
      * Renames a website group across all sites that currently use it.
      *
      * Requires Superuser access.
@@ -2082,7 +2139,7 @@ class API extends \Piwik\Plugin\API
      * Scans the site's content to identify which consent manager (if any) is in use
      * and whether it is properly connected to Matomo.
      *
-     * @param int $idSite The numeric ID of the website to inspect.
+     * @param int $idSite  The numeric ID of the website to inspect.
      * @param int $timeOut HTTP timeout in seconds for fetching the site content.
      * @return array{name: string, url: string|null, isConnected: bool}|null Detected consent manager details,
      *                                                                      or `null` if none was found.
@@ -2092,6 +2149,8 @@ class API extends \Piwik\Plugin\API
     public function detectConsentManager(int $idSite, int $timeOut = 60): ?array
     {
         Piwik::checkUserHasViewAccess($idSite);
+
+        $timeOut = max(1, min($timeOut, 60));
 
         $this->siteContentDetector->detectContent([SiteContentDetectionAbstract::TYPE_CONSENT_MANAGER], $idSite, null, $timeOut);
         $consentManagers = $this->siteContentDetector->getDetectsByType(SiteContentDetectionAbstract::TYPE_CONSENT_MANAGER);

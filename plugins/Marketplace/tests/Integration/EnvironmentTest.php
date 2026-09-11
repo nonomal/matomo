@@ -12,6 +12,7 @@ namespace Piwik\Plugins\Marketplace\tests\Integration\Api;
 use Piwik\Plugin;
 use Piwik\Plugin\ReleaseChannels;
 use Piwik\Plugins\Marketplace\Environment;
+use Piwik\Option;
 use Piwik\Tests\Framework\Fixture;
 use Piwik\Tests\Framework\TestCase\IntegrationTestCase;
 use Piwik\Version;
@@ -32,6 +33,8 @@ class EnvironmentTest extends IntegrationTestCase
     public function setUp(): void
     {
         parent::setUp();
+        Option::delete(Environment::OPTION_MARKETPLACE_UNIQUE_ID);
+        Option::delete(Environment::OPTION_WEB_PHP_VERSION);
 
         Fixture::createSuperUser();
         Fixture::createWebsite('2014-01-01 02:02:02');
@@ -44,10 +47,45 @@ class EnvironmentTest extends IntegrationTestCase
         $this->environment = new Environment($releaseChannes);
     }
 
+    public function tearDown(): void
+    {
+        Option::delete(Environment::OPTION_MARKETPLACE_UNIQUE_ID);
+        Option::delete(Environment::OPTION_WEB_PHP_VERSION);
+
+        parent::tearDown();
+    }
+
     public function testGetPhpVersion()
     {
         $phpVersion = explode('-', phpversion()); // cater for pre-release versions like 8.3.0-dev
         $this->assertTrue(version_compare($phpVersion[0], $this->environment->getPhpVersion(), '>='));
+    }
+
+    public function testGetPhpVersionReturnsTheRunningVersionEvenWhenAPageRecordedAnother()
+    {
+        // plugin installs check require.php against this, so it has to describe the process in hand
+        Option::set(Environment::OPTION_WEB_PHP_VERSION, '8.1.99');
+
+        $phpVersion = explode('-', phpversion());
+
+        $this->assertSame($phpVersion[0], $this->environment->getPhpVersion());
+    }
+
+    public function testGetWebPhpVersionPrefersTheVersionAPageRecordedWhenRunningUnderCli()
+    {
+        // the tests themselves run under the CLI binary, which is the case this covers: a scheduled
+        // task has to build the same cache key the browser will read, or it warms entries nothing
+        // ever hits and the page pays the cold path anyway
+        Option::set(Environment::OPTION_WEB_PHP_VERSION, '8.1.99');
+
+        $this->assertSame('8.1.99', $this->environment->getWebPhpVersion());
+    }
+
+    public function testGetWebPhpVersionFallsBackToTheRunningVersionWhenNoPageHasRecordedOne()
+    {
+        $phpVersion = explode('-', phpversion());
+
+        $this->assertSame($phpVersion[0], $this->environment->getWebPhpVersion());
     }
 
     public function testGetPiwikVersion()
@@ -84,5 +122,18 @@ class EnvironmentTest extends IntegrationTestCase
     public function testDoesPreferStable()
     {
         $this->assertTrue($this->environment->doesPreferStable());
+    }
+
+    public function testGetUniqueIdReturnsStoredMarketplaceUniqueId()
+    {
+        $uniqueId = str_repeat('a', 64);
+        Option::set(Environment::OPTION_MARKETPLACE_UNIQUE_ID, $uniqueId);
+
+        $this->assertSame($uniqueId, $this->environment->getUniqueId());
+    }
+
+    public function testGetUniqueIdCreatesMarketplaceUniqueIdWhenMissing()
+    {
+        $this->assertRegExp('/^[a-f0-9]{64}$/', $this->environment->getUniqueId());
     }
 }

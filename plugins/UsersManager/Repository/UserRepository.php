@@ -3,6 +3,7 @@
 namespace Piwik\Plugins\UsersManager\Repository;
 
 use Piwik\Auth\Password;
+use Piwik\Concurrency\Lock;
 use Piwik\Container\StaticContainer;
 use Piwik\Date;
 use Piwik\Metrics\Formatter;
@@ -73,19 +74,24 @@ class UserRepository
             Piwik::checkUserHasAdminAccess($initialIdSite);
         }
 
-        BaseValidator::check(Piwik::translate('General_Username'), $userLogin, [new Login(true)]);
-        BaseValidator::check(Piwik::translate('Installation_Email'), $email, [new Email(true), $this->allowedEmailDomain]);
+        // Serialise the uniqueness validation and the insert so two concurrent requests cannot both pass the
+        // checks and then persist records whose login and email overlap.
+        $lock = StaticContainer::getContainer()->make(Lock::class, ['namespace' => 'UsersManager']);
+        $lock->execute('createUser', function () use ($userLogin, $email, $password, $isPasswordHashed) {
+            BaseValidator::check(Piwik::translate('General_Username'), $userLogin, [new Login(true)]);
+            BaseValidator::check(Piwik::translate('Installation_Email'), $email, [new Email(true), $this->allowedEmailDomain]);
 
-        if (!empty($password)) {
-            if (!$isPasswordHashed) {
-                $passwordTransformed = UsersManager::getPasswordHash($password);
-            } else {
-                $passwordTransformed = $password;
+            if (!empty($password)) {
+                if (!$isPasswordHashed) {
+                    $passwordTransformed = UsersManager::getPasswordHash($password);
+                } else {
+                    $passwordTransformed = $password;
+                }
+                $password = $this->password->hash($passwordTransformed);
             }
-            $password = $this->password->hash($passwordTransformed);
-        }
 
-        $this->model->addUser($userLogin, $password, $email, Date::now()->getDatetime());
+            $this->model->addUser($userLogin, $password, $email, Date::now()->getDatetime());
+        });
 
         if ($initialIdSite) {
             API::getInstance()->setUserAccess($userLogin, 'view', $initialIdSite);
@@ -110,6 +116,31 @@ class UserRepository
         $generatedToken = $this->model->generateRandomInviteToken();
         $this->model->attachInviteToken($userLogin, $generatedToken, $expiryInDays);
         $this->sendInvitationEmail($user, $generatedToken, $expiryInDays);
+    }
+
+    /**
+     * Replaces the activation token for an unchanged, unexpired pending user
+     * without changing the invitation expiry.
+     */
+    public function refreshInviteToken(
+        string $userLogin,
+        string $expectedInviteToken,
+        string $expectedEmail
+    ): ?string {
+        $generatedToken = $this->model->generateRandomInviteToken();
+
+        if (
+            !$this->model->replaceInviteTokenForPendingUser(
+                $userLogin,
+                $generatedToken,
+                $expectedInviteToken,
+                $expectedEmail
+            )
+        ) {
+            return null;
+        }
+
+        return $generatedToken;
     }
 
     public function generateInviteToken(string $userLogin, int $expiryInDays): string
@@ -182,15 +213,25 @@ class UserRepository
         $user['invite_status'] = 'active';
 
         if (!empty($user['invite_expired_at'])) {
-            $inviteExpireAt = Date::factory($user['invite_expired_at']);
-            // if token expired
-            if (Date::now()->isLater($inviteExpireAt)) {
+            try {
+                $inviteExpireAt = Date::factory($user['invite_expired_at']);
+            } catch (\Exception $e) {
+                // invite_expired_at is not a valid, in-range date (e.g. corrupted by a bug in the past);
+                // treat the invite as expired instead of letting the exception break the whole user list
+                $inviteExpireAt = null;
                 $user['invite_status'] = 'expired';
             }
-            // if token not expired
-            if (Date::now()->isEarlier($inviteExpireAt)) {
-                $dayLeft = floor(Date::secondsToDays($inviteExpireAt->getTimestamp() - Date::now()->getTimestamp()));
-                $user['invite_status'] = $dayLeft;
+
+            if ($inviteExpireAt) {
+                // if token expired
+                if (Date::now()->isLater($inviteExpireAt)) {
+                    $user['invite_status'] = 'expired';
+                }
+                // if token not expired
+                if (Date::now()->isEarlier($inviteExpireAt)) {
+                    $dayLeft = floor(Date::secondsToDays($inviteExpireAt->getTimestamp() - Date::now()->getTimestamp()));
+                    $user['invite_status'] = $dayLeft;
+                }
             }
         }
 
@@ -230,7 +271,7 @@ class UserRepository
 
     /**
      * @param array $users
-     * @return mixed
+     * @return array
      * @throws \Exception
      */
     public function enrichUsers(array $users): array

@@ -564,6 +564,11 @@ class API extends \Piwik\Plugin\API
             $outputType = self::OUTPUT_DOWNLOAD;
         }
 
+        // checked upfront so no report is rendered for an output mode that will be refused anyway
+        if (self::isStreamingOutputType($outputType)) {
+            ReportRenderer::checkStreamingToBrowserIsAllowed();
+        }
+
         /** @var Translator $translator */
         $translator = StaticContainer::get('Piwik\Translation\Translator');
 
@@ -662,29 +667,6 @@ class API extends \Piwik\Plugin\API
                     $apiParameters = $action['parameters'];
                 }
 
-                $mustRestoreGET = false;
-
-                // all Websites dashboard should not be truncated in the report
-                if ($apiModule == 'MultiSites') {
-                    $mustRestoreGET = $_GET;
-                    $_GET['enhanced'] = true;
-
-                    if ($apiAction == 'getAll') {
-                        $_GET['filter_truncate'] = false;
-                        $_GET['filter_limit'] = -1; // show all websites in all websites report
-
-                        // when a view/admin user created a report, workaround the fact that "Super User"
-                        // is enforced in Scheduled tasks, and ensure Multisites.getAll only return the websites that this user can access
-                        $userLogin = $report['login'];
-                        if (
-                            !empty($userLogin)
-                            && !Piwik::hasTheUserSuperUserAccess($userLogin)
-                        ) {
-                            $_GET['_restrictSitesToLogin'] = $userLogin;
-                        }
-                    }
-                }
-
                 $params = [
                     'idSite' => $idSite,
                     'period' => $period,
@@ -697,7 +679,31 @@ class API extends \Piwik\Plugin\API
                     'language' => $language,
                     'serialize' => 0,
                     'format' => 'original',
+                    // Always process report data with the default filters when generating a report,
+                    // regardless of the parameters present in the original request.
+                    'disable_queued_filters' => 0,
+                    'disable_generic_filters' => 0,
                 ];
+
+                // all Websites dashboard should not be truncated in the report
+                if ($apiModule == 'MultiSites') {
+                    $params['enhanced'] = true;
+
+                    if ($apiAction == 'getAll') {
+                        $params['filter_truncate'] = false;
+                        $params['filter_limit'] = -1; // show all websites in all websites report
+
+                        // when a view/admin user created a report, workaround the fact that "Super User"
+                        // is enforced in Scheduled tasks, and ensure Multisites.getAll only return the websites that this user can access
+                        $userLogin = $report['login'];
+                        if (
+                            !empty($userLogin)
+                            && !Piwik::hasTheUserSuperUserAccess($userLogin)
+                        ) {
+                            $params['_restrictSitesToLogin'] = $userLogin;
+                        }
+                    }
+                }
 
                 if ($segment != null) {
                     $params['segment'] = urlencode($segment['definition']);
@@ -724,10 +730,6 @@ class API extends \Piwik\Plugin\API
 
                 // TODO add static method getPrettyDate($period, $date) in Period
                 $prettyDate = $processedReport['prettyDate'];
-
-                if ($mustRestoreGET) {
-                    $_GET = $mustRestoreGET;
-                }
 
                 $processedReports[] = $processedReport;
             }
@@ -800,7 +802,7 @@ class API extends \Piwik\Plugin\API
         $reportRenderer->setReport($report);
 
         // render report
-        $description = str_replace(["\r", "\n"], ' ', Common::unsanitizeInputValue($report['description']));
+        $reportName = str_replace(["\r", "\n"], ' ', Common::unsanitizeInputValue((string) $report['description']));
 
         [$reportSubject, $reportTitle] = self::getReportSubjectAndReportTitle(Common::unsanitizeInputValue(Site::getNameFor((int)$idSite)), $report['reports']);
 
@@ -808,9 +810,9 @@ class API extends \Piwik\Plugin\API
         if (is_array($segment) && strlen($segment['name'])) {
             $reportTitle .= " - " . $segment['name'];
         }
-        $filename = "$reportTitle - $prettyDate - $description";
+        $filename = "$reportTitle - $prettyDate - $reportName";
 
-        $reportRenderer->renderFrontPage($reportTitle, $prettyDate, $description, $reportMetadata, $segment ?? []);
+        $reportRenderer->renderFrontPage($reportTitle, $prettyDate, $reportName, $reportMetadata, $segment ?? []);
         array_walk($processedReports, [$reportRenderer, 'renderReport']);
 
         switch ($outputType) {
@@ -846,11 +848,22 @@ class API extends \Piwik\Plugin\API
     }
 
     /**
+     * Whether the given output mode streams the report to the browser. Mirrors the output modes
+     * handled by the switch in {@see generateReport()}, where any unknown mode means download.
+     *
+     * @param int|false $outputType
+     */
+    private static function isStreamingOutputType($outputType): bool
+    {
+        return !in_array($outputType, [self::OUTPUT_SAVE_ON_DISK, self::OUTPUT_RETURN]);
+    }
+
+    /**
      * Sends a scheduled report immediately. Generates the report, saves it to a temporary file,
      * dispatches it via the configured transport medium, and cleans up.
      *
      * @param int $idReport The scheduled report ID to send.
-     * @param 'day'|'week'|'month'|'year'|false $period The data period to send, or `false` to use the report's
+     * @param 'day'|'week'|'month'|'year'|'range'|false $period The data period to send, or `false` to use the report's
      *                                                 stored period.
      * @param string|false $date The date to generate the report for (e.g. `'2024-01-15'`),
      *                           or `false` to use the previous scheduled period.
@@ -865,7 +878,7 @@ class API extends \Piwik\Plugin\API
         /** @phpstan-var ScheduledReport $report */
 
         if (!empty($period)) {
-            self::validatePeriodParam($period);
+            self::validatePeriodParam($period, true);
             $report['period_param'] = $period;
         }
 
@@ -875,44 +888,47 @@ class API extends \Piwik\Plugin\API
 
         Context::changeIdSite($report['idsite'], function () use ($report, $idReport, $date, $force) {
 
-            $language = \Piwik\Plugins\LanguagesManager\API::getInstance()->getLanguageForUser($report['login']);
-
-            // generate report
-            $this->enableSaveReportOnDisk = true;
-            try {
-                [$outputFilename, $prettyDate, $reportSubject, $reportTitle, $additionalFiles] =
-                    $this->generateReport(
-                        $idReport,
-                        $date,
-                        $language,
-                        self::OUTPUT_SAVE_ON_DISK,
-                        $report['period_param'] ?? false
-                    );
-            } catch (NoAccessException $e) {
-                // This might occur if for some reason a report exists where the user does no longer have access to the
-                // configured site. Normally those reports should be automatically deleted.
-                Log::info("Skipping report as user does no longer have access to configured site");
-                return;
-            } catch (\Throwable $e) {
-                $this->enableSaveReportOnDisk = false;
-                throw new RetryableException($e->getMessage());
-            }
-
-            $this->enableSaveReportOnDisk = false;
-
-            if (!file_exists($outputFilename)) {
-                throw new Exception("The report file wasn't found in $outputFilename");
-            }
-
-            $contents = file_get_contents($outputFilename);
-
-            if (empty($contents)) {
-                Log::warning("Scheduled report file '%s' exists but is empty!", $outputFilename);
-            }
-
-            $reportType = $report['type'];
+            $outputFilename = null;
 
             try {
+                $language = \Piwik\Plugins\LanguagesManager\API::getInstance()->getLanguageForUser($report['login']);
+
+                // generate report
+                $this->enableSaveReportOnDisk = true;
+                try {
+                    [$outputFilename, $prettyDate, $reportSubject, $reportTitle, $additionalFiles] =
+                        $this->generateReport(
+                            $idReport,
+                            $date,
+                            $language,
+                            self::OUTPUT_SAVE_ON_DISK,
+                            $report['period_param'] ?? false
+                        );
+                } catch (NoAccessException $e) {
+                    // This might occur if for some reason a report exists where the user does no longer have access to
+                    // the configured site. Normally those reports should be automatically deleted.
+                    Log::info("Skipping report as user does no longer have access to configured site");
+                    return;
+                } catch (\Throwable $e) {
+                    throw new RetryableException($e->getMessage());
+                } finally {
+                    // Always clear the flag, regardless of how we leave the block. This is a singleton, so a value
+                    // left behind here would stay set for the rest of the process and affect later requests.
+                    $this->enableSaveReportOnDisk = false;
+                }
+
+                if (!file_exists($outputFilename)) {
+                    throw new Exception("The report file wasn't found in $outputFilename");
+                }
+
+                $contents = file_get_contents($outputFilename);
+
+                if (empty($contents)) {
+                    Log::warning("Scheduled report file '%s' exists but is empty!", $outputFilename);
+                }
+
+                $reportType = $report['type'];
+
                 /**
                  * Triggered when sending scheduled reports.
                  *
@@ -957,7 +973,9 @@ class API extends \Piwik\Plugin\API
                 $now = Date::now()->getDatetime();
                 $this->getModel()->updateReport($report['idreport'], ['ts_last_sent' => $now]);
             } finally {
-                if (!Development::isEnabled()) {
+                // Always clean up the generated report file, even if something failed before we got to send it.
+                // Otherwise a partly-generated file could be left behind on disk.
+                if (null !== $outputFilename && !Development::isEnabled()) {
                     @chmod($outputFilename, 0600);
                     Filesystem::deleteFileIfExists($outputFilename);
                 }
@@ -1110,11 +1128,13 @@ class API extends \Piwik\Plugin\API
         }
     }
 
-    private static function validatePeriodParam(string $period): void
+    private static function validatePeriodParam(string $period, bool $allowRange = false): void
     {
         $periodValidator = new Period\PeriodValidator();
         $allowedPeriods = array_flip($periodValidator->getPeriodsAllowedForAPI());
-        unset($allowedPeriods['range']);
+        if (!$allowRange) {
+            unset($allowedPeriods['range']);
+        }
 
         if (!array_key_exists($period, $allowedPeriods)) {
             throw new Exception('Report period must be one of the following: ' . implode(', ', array_keys($allowedPeriods)) . ' (got ' . $period . ')');
@@ -1132,7 +1152,8 @@ class API extends \Piwik\Plugin\API
     }
 
     /**
-     * @param int|string|false|null $idSegment Normalized in place to `null` when empty.
+     * @param int|string|false|null $idSegment Normalized in place to `null` when empty, or to a strict integer for a
+     *                                          valid segment so the value that gets stored matches the value validated.
      */
     private static function validateIdSegment(&$idSegment): void
     {
@@ -1142,6 +1163,10 @@ class API extends \Piwik\Plugin\API
             throw new Exception('Invalid segment identifier. Should be an integer.');
         } elseif (self::getSegment($idSegment) == null) {
             throw new Exception('Segment with id ' . $idSegment . ' does not exist or SegmentEditor is not activated.');
+        } else {
+            // Cast to a strict integer so the value written to the integer `idsegment` column is exactly the value we
+            // just validated, rather than relying on the database to coerce it.
+            $idSegment = (int) $idSegment;
         }
     }
 

@@ -31,9 +31,10 @@ describe("WidgetizedDashboard", function () {
     };
 
     var clickDashboardMenuItem = async function (item) {
+        await page.waitForSelector('.dashboard-manager .title', { visible: true });
         await page.click('.dashboard-manager .title');
-        await page.waitForTimeout(50);
-        await page.click('li[data-action="' + item + '"]');
+        await page.waitForSelector('button[data-action="' + item + '"]', { visible: true });
+        await page.click('button[data-action="' + item + '"]');
     }
 
     var setup = async function() {
@@ -92,7 +93,7 @@ describe("WidgetizedDashboard", function () {
         var widget = await page.$('.widgetTop');
         await widget.hover();
 
-        await page.click('.button#refresh');
+        await page.click('.widgetControls__action--refresh');
         await page.mouse.move(-10, -10);
 
         await page.waitForNetworkIdle();
@@ -103,7 +104,7 @@ describe("WidgetizedDashboard", function () {
     it("should minimise widget when widget minimise icon clicked", async function() {
         var widget = await page.$('.widgetTop');
         await widget.hover();
-        await page.click('.button#minimise');
+        await page.click('.widgetControls__action--minimise');
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('widget_minimised');
     });
@@ -111,7 +112,7 @@ describe("WidgetizedDashboard", function () {
     it("should unminimise widget when widget maximise icon is clicked after being minimised", async function() {
         var widget = await page.$('.widgetTop');
         await widget.hover();
-        await page.click('.button#maximise');
+        await page.click('.widgetControls__action--maximise');
         await page.mouse.move(-10, -10);
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('widget_unminimise');
@@ -120,7 +121,7 @@ describe("WidgetizedDashboard", function () {
     it("should maximise widget when widget maximise icon is clicked", async function() {
         var widget = await page.$('.widgetTop');
         await widget.hover();
-        await page.click('.button#maximise');
+        await page.click('.widgetControls__action--maximise');
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('widget_maximise');
     });
@@ -128,28 +129,38 @@ describe("WidgetizedDashboard", function () {
     it("should close maximise dialog when minimise icon is clicked", async function() {
         var widget = await page.$('.widgetTop');
         await widget.hover();
-        await page.click('.button#minimise');
+        await page.click('.widgetControls__action--minimise');
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('widget_unmaximise');
     });
 
     it("should add a widget when a widget is selected in the dashboard manager", async function() {
+        const modalSelector = '.modal.open.add-widget-modal';
+
         await page.click('.dashboard-manager .title');
+        await page.waitForTimeout(50);
+        await page.click('.dashboard-manager .addWidget-button');
+        await page.waitForSelector(modalSelector);
+        await page.waitForSelector(modalSelector + ' .widgetpreview-categorylist>li button');
 
-        await page.waitForSelector('.widgetpreview-categorylist>li');
-
-        var live = await page.jQuery('.widgetpreview-categorylist>li:contains(Goals)'); // have to mouse move twice... otherwise Live! will just be highlighted
-        await live.hover();
-        await live.click();
-
-        var behaviour = await page.jQuery('.widgetpreview-categorylist>li:contains(Behaviour):first');
+        var behaviour = await page.jQuery(modalSelector + ' .widgetpreview-categorylist>li button:contains(Behaviour):first');
         await behaviour.hover();
         await behaviour.click();
 
-        var pages = await page.jQuery('.widgetpreview-widgetlist>li:contains(Pages):first');
+        var pages = await page.jQuery(modalSelector + ' .widgetpreview-widgetlist>li button:contains(Pages):first');
         await pages.hover();
+        // Wait for the hover timer in WidgetsList.vue to fire and mark the row as the
+        // chosen widget — that's the signal the next click will select rather than just
+        // preview. Reading the rendered state avoids hard-coding the timer duration.
+        await page.waitForSelector(modalSelector + ' .widgetpreview-widgetlist>li.widgetpreview-choosen');
         await pages.click();
 
+        await page.waitForNetworkIdle();
+
+        // The modal now stays open after a widget is selected so the user can add more
+        // widgets in the same session; close it before screenshotting the dashboard.
+        await page.click(modalSelector + ' .btn-close');
+        await page.waitForFunction(() => !document.querySelector('.modal.open.add-widget-modal'));
         await page.waitForNetworkIdle();
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('widget_add_widget');
@@ -174,7 +185,7 @@ describe("WidgetizedDashboard", function () {
         var titlebar = await page.$(widget + ' .widgetTop');
         await titlebar.hover();
 
-        var icon = await page.$(widget + ' .button#close');
+        var icon = await page.$(widget + ' .widgetControls__action--close');
         await icon.click();
 
         var button = await page.jQuery('.modal.open .modal-footer a:contains(Yes)');
@@ -332,6 +343,7 @@ describe("WidgetizedDashboard", function () {
     it("should load segmented dashboard", async function() {
         await removeAllExtraDashboards();
         await page.goto(url + '&segment=' + encodeURIComponent("browserCode==FF"));
+        await page.waitForNetworkIdle();
 
         expect(await page.screenshot({ fullPage: true })).to.matchImage('segmented');
     });
@@ -358,9 +370,11 @@ describe("WidgetizedDashboard", function () {
         var tokenAuth = "anyInvalidToken";
         await page.goto(url.replace("idDashboard=5", "idDashboard=1") + '&token_auth=' + tokenAuth);
 
-        // should show login page with error message
-        expect(await page.$('#loginPage')).to.be.ok;
-        const errorMessage = await page.evaluate(() => $('.message_container').text());
-        expect(errorMessage).to.contain('You must be logged in to access this functionality.');
+        // widget URLs surface a targeted error explaining the secure-only-token cause
+        // instead of falling through to the generic login page
+        expect(await page.$('#loginPage')).to.be.not.ok;
+        const errorMessage = await page.evaluate(() => document.body.innerText);
+        expect(errorMessage).to.contain('This widget URL could not be authenticated with the supplied');
+        expect(errorMessage).to.contain("'Only allow secure requests' unchecked");
     });
 });

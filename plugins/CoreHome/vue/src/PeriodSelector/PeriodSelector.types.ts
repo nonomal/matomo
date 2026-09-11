@@ -67,7 +67,6 @@ export interface PeriodSelectorState {
   lastKnownHashContextKey: string|null;
   minAllowedDate: Date;
   maxAllowedDate: Date;
-  activePresetId: PresetDateRangeId|null;
   pendingPresetSelection: PresetDateRangeSelection|null;
   committedPeriod: string;
   committedAnchorDate: Date|null;
@@ -84,4 +83,5 @@ export interface PeriodSelectorState {
   compareStartDate: string;
   compareEndDate: string;
   compareAppliedSignature: string;
+  shouldShowInvalidComparisonMessage: boolean;
 }

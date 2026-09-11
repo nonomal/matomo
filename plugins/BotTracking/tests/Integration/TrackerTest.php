@@ -77,6 +77,7 @@ class TrackerTest extends IntegrationTestCase
             ['Claude-User/3.0', 'Claude-User', BotDetector::BOT_TYPE_AI_CHATBOT],
             ['Perplexity-User/1.0', 'Perplexity-User', BotDetector::BOT_TYPE_AI_CHATBOT],
             ['Google-NotebookLM/1.0', 'Google-NotebookLM', BotDetector::BOT_TYPE_AI_CHATBOT],
+            ['Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 (compatible; Google-GeminiNotebook; +https://developers.google.com/crawling/docs/crawlers-fetchers/google-gemininotebook)', 'Google-NotebookLM', BotDetector::BOT_TYPE_AI_CHATBOT],
         ];
     }
 
@@ -173,5 +174,51 @@ class TrackerTest extends IntegrationTestCase
         $tableName = Common::prefixTable('log_action');
         $sql       = "SELECT COUNT(*) FROM `{$tableName}`";
         self::assertEquals(1, Db::fetchOne($sql));
+    }
+
+    public function testVisitsAndBotsShareActionsWhenQueryParametersAreExcluded(): void
+    {
+        $idSite = Fixture::createWebsite(
+            '2014-02-04',
+            $ecommerce = 0,
+            $siteName = false,
+            $siteUrl = false,
+            $siteSearch = 1,
+            $searchKeywordParameters = null,
+            $searchCategoryParameters = null,
+            $timezone = null,
+            $type = null,
+            $excludeUnknownUrls = 0,
+            $excludedParameters = 'excluded'
+        );
+
+        $url = 'https://matomo.org/faq/123?keep=1&excluded=secret';
+
+        // track a normal visit with the excluded parameter
+        $t = Fixture::getTracker($idSite, '2025-02-02 12:00:00');
+        $t->setUrl($url);
+        Fixture::checkResponse($t->doTrackPageView(''));
+
+        // track a bot request with the same URL
+        $t = Fixture::getTracker($idSite, '2025-02-02 12:00:00');
+        $t->setUserAgent('Gemini-Deep-Research/1.0');
+        $t->setUrl($url);
+        $t->setCustomTrackingParameter('recMode', '1');
+        Fixture::checkResponse($t->doTrackPageView(''));
+
+        // the bot request must store the same cleaned URL the normal visit stored,
+        // so both resolve to a single shared action
+        $tableName = BotRequestsDao::getPrefixedTableName();
+        $idActionUrl = Db::fetchOne("SELECT idaction_url FROM `{$tableName}` WHERE idsite = ?", [$idSite]);
+
+        $actionTable = Common::prefixTable('log_action');
+        $name = Db::fetchOne("SELECT name FROM `{$actionTable}` WHERE idaction = ?", [$idActionUrl]);
+        self::assertEquals('matomo.org/faq/123?keep=1', $name);
+
+        $count = Db::fetchOne("SELECT COUNT(*) FROM `{$actionTable}` WHERE name = ? AND type = ?", [
+            'matomo.org/faq/123?keep=1',
+            \Piwik\Tracker\Action::TYPE_PAGE_URL,
+        ]);
+        self::assertEquals(1, $count);
     }
 }
